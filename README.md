@@ -25,7 +25,7 @@ poetry install
 To run the application, execute:
 
 ```bash
-python src/main.py
+poetry run python src/main.py
 ```
 
 This will print "Hello, World!" to the console.
