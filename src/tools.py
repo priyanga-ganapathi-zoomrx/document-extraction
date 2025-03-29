@@ -10,6 +10,7 @@ from .env_utils import get_env
 import json
 import re
 import os
+from colorama import Fore, Style
 
 # Initialize the underlying Tavily search API with explicit API key
 tavily_api_key = get_env("TAVILY_API_KEY", required=True)
@@ -35,6 +36,7 @@ def search(term: str) -> str:
     Returns:
         Relevant information about the searched term from trusted sources.
     """
+    print(Fore.CYAN + f"[TOOL - search] Input: {term}" + Style.RESET_ALL)
     try:
         # Call the Tavily API with the search term
         search_results = tavily_api.invoke({"query": f"pharmaceutical {term}"})
@@ -51,10 +53,13 @@ def search(term: str) -> str:
         else:
             # Handle string response format (when used with a ToolMessage)
             formatted_results += search_results
-            
+        
+        print(Fore.CYAN + f"[TOOL - search] Output length: {len(formatted_results)} chars" + Style.RESET_ALL)
         return formatted_results
     except Exception as e:
-        return f"Error performing search: {str(e)}"
+        error_msg = f"Error performing search: {str(e)}"
+        print(Fore.RED + f"[TOOL - search] Error: {error_msg}" + Style.RESET_ALL)
+        return error_msg
     
 
 # Initialize vectorstore with embeddings
@@ -133,6 +138,8 @@ def lookup_previous(concept: str, entity_type: Optional[str] = None, slide_range
     Returns:
         Relevant information from previous slides that matches the search criteria
     """
+    print(Fore.CYAN + f"[TOOL - lookup_previous] Input: concept='{concept}', entity_type={entity_type}, slide_range={slide_range}" + Style.RESET_ALL)
+
     # Define filter function based on parameters
     def filter_func(doc: Document) -> bool:
         # Entity type filter
@@ -164,7 +171,9 @@ def lookup_previous(concept: str, entity_type: Optional[str] = None, slide_range
         )
         
         if not results:
-            return f"No information found for concept '{concept}' in previous slides."
+            result_msg = f"No information found for concept '{concept}' in previous slides."
+            print(Fore.CYAN + f"[TOOL - lookup_previous] Output: {result_msg}" + Style.RESET_ALL)
+            return result_msg
         
         # Format the results
         formatted_results = f"### Relevant information about '{concept}' from previous slides:\n\n"
@@ -180,10 +189,13 @@ def lookup_previous(concept: str, entity_type: Optional[str] = None, slide_range
             else:
                 formatted_results += f"**Slide {slide_num} - {entity_type}:**\n{doc.page_content}\n\n"
         
+        print(Fore.CYAN + f"[TOOL - lookup_previous] Output length: {len(formatted_results)} chars, found {len(results)} results" + Style.RESET_ALL)
         return formatted_results
     
     except Exception as e:
-        return f"Error retrieving previous information: {str(e)}"
+        error_msg = f"Error retrieving previous information: {str(e)}"
+        print(Fore.RED + f"[TOOL - lookup_previous] Error: {error_msg}" + Style.RESET_ALL)
+        return error_msg
 
 @tool
 def check_schema(entity_type: str) -> str:
@@ -196,6 +208,7 @@ def check_schema(entity_type: str) -> str:
     Returns:
         JSON-formatted schema information about the requested entity type
     """
+    print(Fore.CYAN + f"[TOOL - check_schema] Input: entity_type='{entity_type}'" + Style.RESET_ALL)
     # Normalize the entity type to handle common variations
     entity_type = entity_type.strip().lower()
     
@@ -218,7 +231,9 @@ def check_schema(entity_type: str) -> str:
                 "description": module_tables[entity_type]["description"],
                 "fields": module_tables[entity_type]["fields"]
             }
-            return json.dumps(result, indent=2)
+            json_result = json.dumps(result, indent=2)
+            print(Fore.CYAN + f"[TOOL - check_schema] Output: Found exact table match for '{entity_type}'" + Style.RESET_ALL)
+            return json_result
     
     # If not found as a table, check if it's a module name
     if entity_type in PHARMA_SCHEMA:
@@ -231,7 +246,9 @@ def check_schema(entity_type: str) -> str:
                 "description": table_data["description"],
                 "field_count": len(table_data["fields"])
             }
-        return json.dumps(result, indent=2)
+        json_result = json.dumps(result, indent=2)
+        print(Fore.CYAN + f"[TOOL - check_schema] Output: Found module match for '{entity_type}' with {len(result['tables'])} tables" + Style.RESET_ALL)
+        return json_result
     
     # If we still haven't found it, look for partial matches
     matches = []
@@ -250,10 +267,14 @@ def check_schema(entity_type: str) -> str:
         result = {
             "partial_matches": matches
         }
-        return json.dumps(result, indent=2)
+        json_result = json.dumps(result, indent=2)
+        print(Fore.CYAN + f"[TOOL - check_schema] Output: Found {len(matches)} partial matches for '{entity_type}'" + Style.RESET_ALL)
+        return json_result
     
     # If no matches found, return a helpful error
-    return json.dumps({
+    error_result = json.dumps({
         "error": f"No schema information found for '{entity_type}'",
         "suggestion": "Try a common entity like 'drugs', 'companies', 'diseases', or a module name like 'clinical', 'regulatory'"
     }, indent=2)
+    print(Fore.RED + f"[TOOL - check_schema] Output: No matches found for '{entity_type}'" + Style.RESET_ALL)
+    return error_result

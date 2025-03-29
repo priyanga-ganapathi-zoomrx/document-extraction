@@ -30,6 +30,7 @@ class Nodes:
         doc_metadata, slides = self.pdf_tools.process_pdf(pdf_path)
         
         return {
+            **state,
             "document_metadata": doc_metadata,
             "slides": slides,
             "extracted_data": [],
@@ -38,29 +39,63 @@ class Nodes:
         
     def process_next_slide(self, state: GraphState) -> GraphState:
         """Get next slide for processing."""
+        updated_state = state.copy()
+
+        # Early termination checks
         if not state.get("slides"):
             print(Fore.RED + "No slides found in the document!" + Style.RESET_ALL)
-            return {"processing_complete": True}
-            
-        # If processing_complete flag is already set, don't process any more slides
+            updated_state["processing_complete"] = True
+            return updated_state
+        
         if state.get("processing_complete", False):
-            return {"processing_complete": True}
+            return updated_state
+        
+        total_slides = len(state["slides"])
+
+        # CASE 1: First slide (no current slide yet)
+        if not state.get("current_slide"):
+            updated_state["current_slide"] = state["slides"][0]  # Start with first slide
+            print(Fore.GREEN + f"Processing slide 1 of {total_slides}..." + Style.RESET_ALL)
+            return updated_state
+        
+        try:
+        # Get current slide number
+            current_slide_num = state["current_slide"].slide_number
             
-        if not state.get("current_slide") and state["slides"]:
-            current_slide = state["slides"][0]
-        else:
-            # Find current slide index and get next one
-            current_index = next((i for i, slide in enumerate(state["slides"]) 
-                                if slide.slide_number == state["current_slide"].slide_number), -1)
-            if current_index < len(state["slides"]) - 1:
-                current_slide = state["slides"][current_index + 1]
-            else:
-                # All slides processed
-                print(Fore.GREEN + "All slides have been processed. Moving to export." + Style.RESET_ALL)
-                return {"processing_complete": True}
+            # Find the next slide (simple array lookup)
+            # Since slide_number might not match array index (e.g., if numbering starts at 1),
+            # we need to find where we are in the array
+            current_position = None
+            for i, slide in enumerate(state["slides"]):
+                if slide.slide_number == current_slide_num:
+                    current_position = i
+                    break
+                    
+            # Handle case where current slide wasn't found in the array
+            if current_position is None:
+                print(Fore.RED + f"Error: Current slide (number {current_slide_num}) not found in slides list" + Style.RESET_ALL)
+                updated_state["processing_complete"] = True
+                return updated_state
                 
-        print(Fore.GREEN + f"Processing slide {current_slide.slide_number} of {len(state['slides'])}..." + Style.RESET_ALL)
-        return {"current_slide": current_slide}
+            # Check if there's a next slide
+            if current_position < total_slides - 1:
+                # Move to next slide
+                updated_state["current_slide"] = state["slides"][current_position + 1]
+                next_slide_num = updated_state["current_slide"].slide_number
+                print(Fore.GREEN + f"Processing slide {next_slide_num} of {total_slides}..." + Style.RESET_ALL)
+            else:
+                # We've reached the end
+                print(Fore.GREEN + "All slides have been processed. Moving to export." + Style.RESET_ALL)
+                updated_state["processing_complete"] = True
+                
+            return updated_state
+        
+        except Exception as e:
+            print(Fore.RED + f"Error during slide navigation: {str(e)}" + Style.RESET_ALL)
+            updated_state["processing_complete"] = True  # Safety measure to avoid infinite loops
+            updated_state["error"] = str(e)
+            return updated_state
+
         
     def extract_pharma_data(self, state: GraphState) -> GraphState:
         """Extract pharmaceutical data directly from slide image."""
@@ -137,26 +172,51 @@ class Nodes:
         )
         
         # Add to extraction results
-        return {"extracted_data": updated_extractions}
+        return {**state, "extracted_data": updated_extractions}
         
     def check_processing_complete(self, state: GraphState) -> GraphState:
-        """Check if processing is complete and prepare for the next step."""
-        # This is a good place to add any cleanup or final processing before checking completion
+        """
+        Check if all slides have been processed and mark state accordingly.
         
-        # If the processing_complete flag is already set, just return the state
+        This function verifies completion by comparing extraction count against slide count.
+        
+        Args:
+            state: Current workflow state containing slides and extraction data
+            
+        Returns:
+            Updated state with processing_complete flag set appropriately
+        """
+        # Make a copy to avoid modifying the original state
+        updated_state = state.copy()
+        
+        # If already marked complete, nothing more to do
         if state.get("processing_complete", False):
             print(Fore.YELLOW + "Processing already marked as complete." + Style.RESET_ALL)
+            return updated_state
         
-        # You could add additional logic here if needed
-        # For example, checking if we've processed the expected number of slides
+        # Count slides and extractions
         expected_slides = len(state.get("slides", []))
         processed_slides = len(state.get("extracted_data", []))
         
-        if expected_slides > 0 and processed_slides >= expected_slides:
+        # Perform verification checks
+        if expected_slides == 0:
+            print(Fore.YELLOW + "No slides to process in document." + Style.RESET_ALL)
+            updated_state["processing_complete"] = True
+        elif processed_slides < expected_slides:
+            # Still have slides to process
+            print(Fore.BLUE + f"Progress: {processed_slides}/{expected_slides} slides processed." + Style.RESET_ALL)
+            # Leave processing_complete as False
+        elif processed_slides == expected_slides:
+            # Perfect match - all slides processed exactly once
             print(Fore.GREEN + f"Verified all {processed_slides}/{expected_slides} slides processed." + Style.RESET_ALL)
-            return {"processing_complete": True, **state}
-            
-        return state
+            updated_state["processing_complete"] = True
+        else:  # processed_slides > expected_slides
+            # This is unusual - more extractions than slides
+            print(Fore.YELLOW + f"Warning: Found {processed_slides} extractions for {expected_slides} slides." + Style.RESET_ALL)
+            updated_state["processing_complete"] = True
+            updated_state["extraction_warning"] = "More extractions than slides detected"
+        
+        return updated_state
         
     def is_processing_complete(self, state: GraphState) -> str:
         """Check if all slides have been processed."""
