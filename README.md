@@ -21,5 +21,5 @@ poetry install
 To run the application, execute:
 
 ```bash
-python src/main.py
+python src/main.py {pdf_file_path}
 ```
