@@ -14,6 +14,9 @@ langchain-mcp-adapters = "^0.0.5"
 langchain-core = "^0.3.49"
 langchain-openai = "^0.3.11"
 langsmith = "^0.3.19"
+pymupdf = "^1.25.4"
+langchain-anthropic = "^0.3.10"
+colorama = "^0.4.6"
 
 
 [build-system]

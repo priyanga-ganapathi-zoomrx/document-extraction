@@ -1,7 +1,3 @@
-# Document Extraction
-
-A simple Python project that prints "Hello, World!".
-
 ## Prerequisites
 
 - Python 3.x
@@ -25,16 +21,5 @@ poetry install
 To run the application, execute:
 
 ```bash
-poetry run python src/main.py
-```
-
-This will print "Hello, World!" to the console.
-
-## Project Structure
-
-```
-document-extraction/
-├── src/
-│   └── main.py    # Main application file
-└── README.md      # This file
+python src/main.py
 ```
