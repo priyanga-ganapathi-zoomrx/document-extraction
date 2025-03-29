@@ -36,7 +36,7 @@ def main():
     
     # Run the extraction workflow
     print(Fore.GREEN + f"Starting workflow for {args.pdf_path}..." + Style.RESET_ALL)
-    for output in app.stream(initial_state):
+    for output in app.stream(initial_state, config={"recursion_limit": 10000}):
         for key, value in output.items():
             print(Fore.CYAN + f"Finished running: {key}" + Style.RESET_ALL)
     
