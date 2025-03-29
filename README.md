@@ -16,10 +16,12 @@ cd document-extraction
 poetry install
 ```
 
+If you encounter any warnings about the project not being installable, you can safely ignore them as the project is configured in non-package mode.
+
 ## Running the Application
 
 To run the application, execute:
 
 ```bash
-python src/main.py {pdf_file_path}
+python main.py {pdf_file_path}
 ```
