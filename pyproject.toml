@@ -18,6 +18,9 @@ langsmith = "^0.3.19"
 pymupdf = "^1.25.4"
 langchain-anthropic = "^0.3.10"
 colorama = "^0.4.6"
+langchain-tavily = "^0.1.5"
+langchain-google-genai = "^2.1.2"
+langgraph-cli = {extras = ["inmem"], version = "^0.1.81"}
 
 
 [build-system]

@@ -22,4 +22,3 @@ class GraphState(TypedDict, total=False):
     extracted_data: List[str]  # Markdown-formatted extraction results
     processing_complete: bool
     pdf_path: str
-    export_format: str

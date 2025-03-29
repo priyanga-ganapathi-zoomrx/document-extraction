@@ -1,42 +1,23 @@
-from langchain_core.prompts import ChatPromptTemplate, HumanMessagePromptTemplate, SystemMessagePromptTemplate
-from langchain_anthropic import ChatAnthropic
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.prebuilt import create_react_agent
+from .tools import search, lookup_previous, check_schema
 from .prompts import *
+import os
 
 class Agents:
     def __init__(self):
-        # Initialize models
-        self.claude = ChatAnthropic(model="claude-3-opus-20240229", temperature=0.1)
+        """
+        Initialize the Agents class.
+        """
+        # Initialize Gemini model with proper configuration for image processing
+        self.gemini = ChatGoogleGenerativeAI(temperature=0, model="gemini-1.5-pro")
         
-        # Create a chain that handles the message formatting and image
-        def create_messages(inputs):
-            # Format the text portion of the message
-            formatted_text = PHARMA_EXTRACTION_USER_PROMPT_TEMPLATE.format(
-                presentation_title=inputs["presentation_title"],
-                company_name=inputs["company_name"],
-                presentation_date=inputs["presentation_date"],
-                event_name=inputs["event_name"],
-                slide_number=inputs["slide_number"],
-                total_slides=inputs["total_slides"],
-                document_source_id=inputs["document_source_id"],
-                previous_extractions=inputs["previous_extractions"]
-            )
-            
-            # Create the messages with system prompt and human message (text + image)
-            messages = [
-                SystemMessage(content=PHARMA_EXTRACTION_SYSTEM_PROMPT),
-                HumanMessage(content=[
-                    {"type": "text", "text": formatted_text},
-                    {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": inputs["slide_image"]}}
-                ])
-            ]
-            
-            return messages
+        # Define tools
+        tools = [search, lookup_previous, check_schema]
         
-        # Create the extraction chain
-        self.pharma_data_extractor = (
-            create_messages | 
-            self.claude | 
-            StrOutputParser()
+        # Create the ReAct agent for pharmaceutical extraction
+        self.pharma_data_extractor = create_react_agent(
+            model=self.gemini,
+            tools=tools,
+            prompt=PHARMA_EXTRACTION_SYSTEM_PROMPT
         )

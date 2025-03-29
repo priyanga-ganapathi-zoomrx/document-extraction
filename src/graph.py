@@ -8,7 +8,7 @@ class PharmDataWorkflow:
         workflow = StateGraph(GraphState)
         nodes = Nodes()
         
-        # Define simplified graph nodes
+        # Define graph nodes
         workflow.add_node("load_document", nodes.load_document)
         workflow.add_node("process_next_slide", nodes.process_next_slide)
         workflow.add_node("extract_pharma_data", nodes.extract_pharma_data)
@@ -18,7 +18,7 @@ class PharmDataWorkflow:
         # Entry point
         workflow.set_entry_point("load_document")
         
-        # Define workflow edges (simplified)
+        # Define workflow edges
         workflow.add_edge("load_document", "process_next_slide")
         workflow.add_edge("process_next_slide", "extract_pharma_data")
         workflow.add_edge("extract_pharma_data", "check_processing_complete")

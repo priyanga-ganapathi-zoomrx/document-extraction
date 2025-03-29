@@ -1,11 +1,8 @@
 from colorama import Fore, Style
 from src.graph import PharmDataWorkflow
-from dotenv import load_dotenv
+from src.env_utils import get_env
 import argparse
 import os
-
-# Load environment variables
-load_dotenv()
 
 def main():
     # Set up command line argument parsing
@@ -35,7 +32,6 @@ def main():
         "extracted_data": [],
         "processing_complete": False,
         "pdf_path": pdf_absolute_path,  # Add PDF path to initial state
-        "export_format": "md"  # Set default export format
     }
     
     # Run the extraction workflow
