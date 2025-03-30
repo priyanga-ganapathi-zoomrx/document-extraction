@@ -1,15 +1,12 @@
 # tools.py
-from typing import Optional, List, Dict, Any, Callable
 from langchain_core.tools import tool
 from langchain_tavily import TavilySearch
 from langchain_core.documents import Document
-from langchain_core.vectorstores import InMemoryVectorStore
+from langchain_community.vectorstores import DocArrayInMemorySearch
 from langchain_openai import OpenAIEmbeddings
 from .schema_data import PHARMA_SCHEMA
 from .env_utils import get_env
 import json
-import re
-import os
 from colorama import Fore, Style
 
 # Initialize the underlying Tavily search API with explicit API key
@@ -61,141 +58,61 @@ def search(term: str) -> str:
         print(Fore.RED + f"[TOOL - search] Error: {error_msg}" + Style.RESET_ALL)
         return error_msg
     
-
-# Initialize vectorstore with embeddings
-# Using OpenAI embeddings, but could be replaced with a local model like HuggingFace
-openai_api_key = get_env("OPENAI_API_KEY")
-embeddings = OpenAIEmbeddings(model="text-embedding-3-small", openai_api_key=openai_api_key)
-vector_store = InMemoryVectorStore(embedding=embeddings)
-
-def parse_extraction_to_chunks(extraction_text: str, slide_number: int) -> List[Document]:
-    """
-    Parse an extraction markdown text into document chunks for the vector store.
-    Each entity section becomes a separate chunk with appropriate metadata.
-    
-    Args:
-        extraction_text: The markdown-formatted extraction text
-        slide_number: The slide number this extraction is from
-    
-    Returns:
-        List of Document objects ready to be added to the vector store
-    """
-    chunks = []
-    
-    # Split the extraction into sections based on entity types
-    entity_pattern = r'### (.*?) \((.*?)\)(.*?)(?=### |\Z)'
-    entity_matches = re.finditer(entity_pattern, extraction_text, re.DOTALL)
-    
-    for match in entity_matches:
-        entity_type = match.group(1).strip()
-        schema_table = match.group(2).strip()
-        entity_content = match.group(3).strip()
-        
-        # Create a document for this entity
-        doc = Document(
-            page_content=f"Entity Type: {entity_type}\nSchema Table: {schema_table}\n{entity_content}",
-            metadata={
-                "entity_type": entity_type,
-                "schema_table": schema_table,
-                "slide_number": slide_number
-            }
-        )
-        chunks.append(doc)
-    
-    # Add the full extraction as a document too
-    full_doc = Document(
-        page_content=extraction_text,
-        metadata={
-            "entity_type": "full_extraction",
-            "slide_number": slide_number
-        }
-    )
-    chunks.append(full_doc)
-    
-    return chunks
+embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+vector_store = DocArrayInMemorySearch.from_documents(
+    documents=[],
+    embedding=embeddings
+)
 
 def update_vector_store(extraction_text: str, slide_number: int):
-    """
-    Update the vector store with a new extraction.
-    
-    Args:
-        extraction_text: The markdown-formatted extraction text
-        slide_number: The slide number this extraction is from
-    """
-    chunks = parse_extraction_to_chunks(extraction_text, slide_number)
-    vector_store.add_documents(chunks)
+    """Add an extraction to the vector store."""
+    try:
+        # Add the extraction as a document with slide number as metadata
+        doc = Document(
+            page_content=extraction_text,
+            metadata={"slide_number": slide_number}
+        )
+        
+        # Add to vector store
+        vector_store.add_documents([doc])
+        print(Fore.GREEN + f"Added extraction from slide {slide_number} to vector store" + Style.RESET_ALL)
+    except Exception as e:
+        print(Fore.RED + f"Error updating vector store: {str(e)}" + Style.RESET_ALL)
 
 @tool
-def lookup_previous(concept: str, entity_type: Optional[str] = None, slide_range: Optional[str] = None) -> str:
+def lookup_previous(concept: str) -> str:
     """
     Retrieve information about a concept from previously processed slides.
     
     Args:
-        concept: The concept, term, or entity to search for
-        entity_type: Optional entity type to narrow search (e.g., "drug", "disease")
-        slide_range: Optional slide number range (e.g., "1-5")
+        concept: The concept, term, or entity to search for (e.g., drug name, disease, company)
     
     Returns:
-        Relevant information from previous slides that matches the search criteria
+        Relevant information from previous slides that matches the search concept
     """
-    print(Fore.CYAN + f"[TOOL - lookup_previous] Input: concept='{concept}', entity_type={entity_type}, slide_range={slide_range}" + Style.RESET_ALL)
-
-    # Define filter function based on parameters
-    def filter_func(doc: Document) -> bool:
-        # Entity type filter
-        if entity_type and doc.metadata.get("entity_type") != entity_type:
-            return False
-        
-        # Slide range filter
-        if slide_range:
-            try:
-                slide_num = doc.metadata.get("slide_number")
-                if "-" in slide_range:
-                    start, end = map(int, slide_range.split("-"))
-                    if not (start <= slide_num <= end):
-                        return False
-                else:
-                    if slide_num != int(slide_range):
-                        return False
-            except (ValueError, TypeError):
-                pass  # Ignore invalid slide range formats
-        
-        return True
-    
     try:
-        # Get results from vector store with filtering
+        # Perform similarity search
         results = vector_store.similarity_search(
             query=concept,
-            k=5,  # Return top 5 most relevant results
-            filter=filter_func
+            k=3  # Return top 3 most relevant results
         )
         
         if not results:
-            result_msg = f"No information found for concept '{concept}' in previous slides."
-            print(Fore.CYAN + f"[TOOL - lookup_previous] Output: {result_msg}" + Style.RESET_ALL)
-            return result_msg
+            return f"No information found about '{concept}' in previous slides."
         
-        # Format the results
-        formatted_results = f"### Relevant information about '{concept}' from previous slides:\n\n"
+        # Format results - return full slide content
+        formatted_results = f"### Information about '{concept}' from previous slides:\n\n"
         
         for doc in results:
             slide_num = doc.metadata.get("slide_number", "Unknown")
-            entity_type = doc.metadata.get("entity_type", "Unknown")
             
-            # Format the content based on whether it's a full extraction or an entity
-            if entity_type == "full_extraction":
-                excerpt = doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content
-                formatted_results += f"**Slide {slide_num} - Full Extraction Excerpt:**\n{excerpt}\n\n"
-            else:
-                formatted_results += f"**Slide {slide_num} - {entity_type}:**\n{doc.page_content}\n\n"
+            # Include the full slide content
+            formatted_results += f"**From Slide {slide_num}:**\n\n{doc.page_content}\n\n---\n\n"
         
-        print(Fore.CYAN + f"[TOOL - lookup_previous] Output length: {len(formatted_results)} chars, found {len(results)} results" + Style.RESET_ALL)
         return formatted_results
-    
+        
     except Exception as e:
-        error_msg = f"Error retrieving previous information: {str(e)}"
-        print(Fore.RED + f"[TOOL - lookup_previous] Error: {error_msg}" + Style.RESET_ALL)
-        return error_msg
+        return f"Error searching previous slides: {str(e)}"
 
 @tool
 def check_schema(entity_type: str) -> str:
