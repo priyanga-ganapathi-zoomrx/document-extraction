@@ -25,5 +25,5 @@ If you encounter any warnings about the project not being installable, you can s
 To run the application, execute:
 
 ```bash
-python main.py sample.pdf
+poetry run python main.py sample.pdf
 ```
