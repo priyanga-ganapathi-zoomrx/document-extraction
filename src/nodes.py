@@ -228,51 +228,32 @@ class Nodes:
         )
 
         # Format for Gemini - it uses image_url format with base64 data
-        print(Fore.BLUE + "Using Gemini model format for images" + Style.RESET_ALL)
-        extraction_input = {
-            "messages": [
-                (
-                    "user",
-                    [
-                        {"type": "text", "text": formatted_text},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{state['current_slide'].base64_image}"
-                            },
-                        },
-                    ],
-                )
-            ]
-        }
+       
+        input_content = [
+            {"type": "text", "text": formatted_text},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/png;base64,{state['current_slide'].base64_image}"
+                },
+            },
+        ]
+
+        extraction_input = {"input": input_content}
 
         result = self.agents.pharma_data_extractor.invoke(extraction_input)
 
         # Process the result from the ReAct agent
-        if isinstance(result, dict) and "messages" in result:
-            # The ReAct agent returns a dictionary with a "messages" key containing all messages
-            # The last message is the final extraction result from the AI
-            last_message = result["messages"][-1]
-
-            # Extract the markdown content from the message
-            if hasattr(last_message, "content"):
-                markdown_result = last_message.content
-            else:
-                # Handle tuple format if that's what's returned
-                markdown_result = (
-                    last_message[1]
-                    if isinstance(last_message, tuple)
-                    else str(last_message)
-                )
+        if isinstance(result, dict) and "output" in result:
+            markdown_result = result["output"]
         else:
             # Fallback in case the result structure is different
             markdown_result = str(result)
 
-        # Ensure markdown_result is a string
         if not isinstance(markdown_result, str):
             print(
                 Fore.YELLOW
-                + f"Warning: Expected string but got {type(markdown_result)}. Converting to string."
+                + f"Warning: Expected string output but got {type(markdown_result)}. Converting to string."
                 + Style.RESET_ALL
             )
             markdown_result = str(markdown_result)

@@ -1,5 +1,6 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.prebuilt import create_react_agent
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.agents import AgentExecutor, create_tool_calling_agent
 from trustcall import create_extractor
 from .tools import search, lookup_previous, check_schema
 from .prompts import PHARMA_EXTRACTION_SYSTEM_PROMPT
@@ -20,12 +21,24 @@ class Agents:
         # Define tools
         tools = [search, lookup_previous, check_schema]
 
-        # Create the ReAct agent for pharmaceutical extraction
-        self.pharma_data_extractor = create_react_agent(
-            model=self.gemini,
+        pharma_extraction_prompt_template = ChatPromptTemplate.from_messages([
+            ("system", PHARMA_EXTRACTION_SYSTEM_PROMPT), # Use the detailed system prompt string
+            MessagesPlaceholder(variable_name="agent_scratchpad"), # For agent's internal steps/tool calls
+            ("user", "{input}"), # Represents the user query (text + image) coming from nodes.py
+        ])
+
+        pharma_agent_runnable = create_tool_calling_agent(
+            llm=self.gemini,
             tools=tools,
-            prompt=PHARMA_EXTRACTION_SYSTEM_PROMPT,
+            prompt=pharma_extraction_prompt_template, # Pass the structured prompt template
         )
+
+        self.pharma_data_extractor = AgentExecutor(
+            agent=pharma_agent_runnable,
+            tools=tools,
+            max_iterations=9999
+        )
+
 
         self.metadata_extractor = create_extractor(
             self.gemini,
