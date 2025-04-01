@@ -1,8 +1,3 @@
-"""
-Pharmaceutical database schema definition.
-This file contains the complete schema structure used for data extraction and mapping.
-"""
-
 PHARMA_SCHEMA = {
     "core_entities": {
         "companies": {

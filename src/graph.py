@@ -10,6 +10,7 @@ class PharmDataWorkflow:
         
         # Define graph nodes
         workflow.add_node("load_document", nodes.load_document)
+        workflow.add_node("extract_document_metadata", nodes.extract_document_metadata)
         workflow.add_node("process_next_slide", nodes.process_next_slide)
         workflow.add_node("extract_pharma_data", nodes.extract_pharma_data)
         workflow.add_node("check_processing_complete", nodes.check_processing_complete)
@@ -19,7 +20,8 @@ class PharmDataWorkflow:
         workflow.set_entry_point("load_document")
         
         # Define workflow edges
-        workflow.add_edge("load_document", "process_next_slide")
+        workflow.add_edge("load_document", "extract_document_metadata")
+        workflow.add_edge("extract_document_metadata", "process_next_slide")
         workflow.add_edge("process_next_slide", "extract_pharma_data")
         workflow.add_edge("extract_pharma_data", "check_processing_complete")
         

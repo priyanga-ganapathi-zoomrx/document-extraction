@@ -2,14 +2,14 @@ import base64
 import fitz  # PyMuPDF
 import os
 from typing import Tuple, List
-from .state import DocumentMetadata, Slide
+from .state import Slide
 from colorama import Fore, Style
 
 class PDFToolsClass:
     def __init__(self):
         pass
         
-    def process_pdf(self, pdf_path: str) -> Tuple[DocumentMetadata, List[Slide]]:
+    def process_pdf(self, pdf_path: str) -> List[Slide]:
         """
         Process PDF into document metadata and slides.
         """
@@ -18,13 +18,7 @@ class PDFToolsClass:
         # Check if file exists
         if not os.path.exists(pdf_path):
             print(Fore.RED + f"Error: PDF file not found at {pdf_path}" + Style.RESET_ALL)
-            return DocumentMetadata(
-                title="",
-                company="",
-                date="",
-                event="",
-                document_id=""
-            ), []
+            return []
             
         try:
             # Load PDF using PyMuPDF
@@ -32,19 +26,6 @@ class PDFToolsClass:
             total_pages = len(pdf_document)
             
             print(f"Successfully opened PDF with {total_pages} pages")
-            
-            # Extract basic metadata
-            # Use filename as title and document_id
-            filename = os.path.basename(pdf_path)
-            title = os.path.splitext(filename)[0]
-            
-            doc_metadata = DocumentMetadata(
-                title=title,
-                company="Extracted or provided",
-                date="Extracted or provided",
-                event="Extracted or provided",
-                document_id=pdf_path  # Use file path as document_id
-            )
             
             # Process slides
             slides = []
@@ -73,14 +54,8 @@ class PDFToolsClass:
             if not slides:
                 print(Fore.RED + "Warning: No slides were extracted from the PDF" + Style.RESET_ALL)
                 
-            return doc_metadata, slides
+            return slides
             
         except Exception as e:
             print(Fore.RED + f"Error processing PDF: {str(e)}" + Style.RESET_ALL)
-            return DocumentMetadata(
-                title="",
-                company="",
-                date="",
-                event="",
-                document_id=""
-            ), []
+            return []

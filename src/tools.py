@@ -4,7 +4,7 @@ from langchain_tavily import TavilySearch
 from langchain_core.documents import Document
 from langchain_community.vectorstores import DocArrayInMemorySearch
 from langchain_openai import OpenAIEmbeddings
-from .schema_data import PHARMA_SCHEMA
+from .constants import PHARMA_SCHEMA
 from .env_utils import get_env
 import json
 from colorama import Fore, Style

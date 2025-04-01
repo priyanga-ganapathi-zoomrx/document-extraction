@@ -1,11 +1,10 @@
 from colorama import Fore, Style
 from .agents import Agents
-from langchain_google_genai import ChatGoogleGenerativeAI
-from .pdf_tools import PDFToolsClass
-from .state import GraphState, DocumentMetadata, Slide
+from .utils import PDFToolsClass
+from .state import GraphState, DocumentMetadata
 from .tools import update_vector_store
-from .prompts import PHARMA_EXTRACTION_USER_PROMPT_TEMPLATE
-
+from .prompts import PHARMA_EXTRACTION_USER_PROMPT_TEMPLATE, SLIDE_METADATA_EXTRACTION_PROMPT
+import os
 class Nodes:
     def __init__(self):
         self.agents = Agents()
@@ -18,24 +17,70 @@ class Nodes:
         # Get the PDF path from the state
         pdf_path = state.get("pdf_path", "")
         
-        if not pdf_path:
-            print(Fore.RED + "Error: No PDF path provided in state" + Style.RESET_ALL)
-            return {
-                "document_metadata": None,
-                "slides": [],
-                "extracted_data": [],
-                "processing_complete": True
-            }
-            
-        doc_metadata, slides = self.pdf_tools.process_pdf(pdf_path)
+        slides = self.pdf_tools.process_pdf(pdf_path)
         
         return {
             **state,
-            "document_metadata": doc_metadata,
             "slides": slides,
             "extracted_data": [],
             "processing_complete": False if slides else True
         }
+    
+    def extract_document_metadata(self, state: GraphState) -> GraphState:
+        """Extract metadata from the first slide of the document using trustcall."""
+        print(Fore.YELLOW + "Extracting document metadata from first slide..." + Style.RESET_ALL)
+        
+        # Make sure we have slides to process
+        if not state.get("slides"):
+            print(Fore.RED + "No slides found in the document!" + Style.RESET_ALL)
+            return {**state, "processing_complete": True}
+        
+        try:
+            # Get the first slide
+            first_slide = state["slides"][0]
+        
+            # Format the extraction input for trustcall
+            extraction_input = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": SLIDE_METADATA_EXTRACTION_PROMPT},
+                            {"type": "image_url", "image_url": {
+                                "url": f"data:image/png;base64,{first_slide.base64_image}"
+                            }}
+                        ]
+                    }
+                ]
+            }
+            
+            print(Fore.BLUE + "Using trustcall metadata extractor on first slide..." + Style.RESET_ALL)
+            
+            # Call the metadata extractor
+            result = self.agents.metadata_extractor.invoke(extraction_input)
+            
+            # Get the structured metadata response
+            document_metadata = result["responses"][0]
+            
+            # Ensure document_id is set
+            document_metadata.document_id = state.get("pdf_path", "Unknown")
+            
+            print(Fore.GREEN + f"Extracted metadata: {document_metadata}" + Style.RESET_ALL)
+            
+            # Update the state with the extracted metadata
+            return {**state, "document_metadata": document_metadata}
+            
+        except Exception as e:
+            print(Fore.RED + f"Error in metadata extraction: {str(e)}" + Style.RESET_ALL)
+            # Fallback to basic metadata
+            document_metadata = DocumentMetadata(
+                title=os.path.basename(state.get("pdf_path", "Unknown")),
+                company="Unknown",
+                date="Unknown",
+                event="Unknown",
+                document_id=state.get("pdf_path", "Unknown")
+            )
+            return {**state, "document_metadata": document_metadata}
         
     def process_next_slide(self, state: GraphState) -> GraphState:
         """Get next slide for processing."""
@@ -161,6 +206,11 @@ class Nodes:
         else:
             # Fallback in case the result structure is different
             markdown_result = str(result)
+
+        # Ensure markdown_result is a string
+        if not isinstance(markdown_result, str):
+            print(Fore.YELLOW + f"Warning: Expected string but got {type(markdown_result)}. Converting to string." + Style.RESET_ALL)
+            markdown_result = str(markdown_result)
 
         # Add to extraction results
         updated_extractions = state["extracted_data"] + [markdown_result]
