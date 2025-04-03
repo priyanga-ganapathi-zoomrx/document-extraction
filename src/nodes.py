@@ -7,6 +7,8 @@ from .prompts import (
     PHARMA_EXTRACTION_USER_PROMPT_TEMPLATE,
     SLIDE_METADATA_EXTRACTION_PROMPT,
     PHARMA_EXTRACTION_SYSTEM_PROMPT,
+    AGGREGATION_USER_PROMPT_TEMPLATE,
+    AGGREGATION_SYSTEM_PROMPT,
 )
 import os
 
@@ -296,7 +298,7 @@ class Nodes:
         return updated_state
 
     def aggregate_extractions(self, state: GraphState) -> GraphState:
-        """Aggregate multiple extraction results into a single optimized extraction."""
+        """Aggregate multiple extraction results into a single optimized extraction using ReAct agent."""
         # Check if we have a current slide with extractions
         if (
             not state.get("current_slide")
@@ -344,7 +346,7 @@ class Nodes:
         # Multiple models were used, need to aggregate
         print(
             Fore.BLUE
-            + f"Aggregating extractions from {len(model_extractions)} models..."
+            + f"Aggregating extractions from {len(model_extractions)} models using ReAct agent..."
             + Style.RESET_ALL
         )
 
@@ -353,9 +355,7 @@ class Nodes:
         for i, extraction in enumerate(model_extractions):
             model_outputs_formatted += f"#### {extraction.model_name} Output:\n```\n{extraction.extraction}\n```\n\n"
 
-        # Format the aggregation prompt using AGGREGATION_USER_PROMPT_TEMPLATE
-        from .prompts import AGGREGATION_USER_PROMPT_TEMPLATE
-
+        # Format the aggregation prompt
         aggregation_prompt = AGGREGATION_USER_PROMPT_TEMPLATE.format(
             PRESENTATION_TITLE=state["document_metadata"].title,
             COMPANY_NAME=state["document_metadata"].company,
@@ -372,9 +372,13 @@ class Nodes:
         aggregator = self.agents.providers[aggregator_model]
 
         try:
-            # Get the aggregated extraction
+            # Get the aggregated extraction using ReAct agent with image and tools
             aggregated_result = aggregator.aggregate_extractions(
-                [ext.extraction for ext in model_extractions], aggregation_prompt
+                [ext.extraction for ext in model_extractions],
+                aggregation_prompt,
+                slide_image=current_slide.base64_image,  # Pass the slide image
+                tools=self.agents.tools,                 # Pass the tools for ReAct agent
+                system_prompt=AGGREGATION_SYSTEM_PROMPT  # Pass the system prompt
             )
 
             # Store the aggregated result in the current slide

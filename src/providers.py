@@ -4,6 +4,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 from colorama import Fore, Style
 from .prompts import AGGREGATION_SYSTEM_PROMPT
+import re
 
 
 class ModelProvider:
@@ -21,6 +22,79 @@ class ModelProvider:
         self.model_name = model_name
         self.model = None  # To be initialized by subclasses
 
+    def create_react_agent(self, tools, system_prompt):
+        """
+        Create a ReAct agent with the given tools and system prompt.
+
+        Args:
+            tools: List of tools to use with the agent
+            system_prompt: System prompt for the agent
+
+        Returns:
+            ReAct agent
+        """
+        return create_react_agent(
+            model=self.model,
+            tools=tools,
+            prompt=system_prompt,
+        )
+
+    def extract_markdown_content(self, result):
+        """
+        Extract markdown content from model response.
+        
+        Args:
+            result: Result from model invocation
+
+        Returns:
+            Extracted markdown content as string
+        """
+        # Check for LangChain message objects first
+        if hasattr(result, "content") and not callable(getattr(result, "content", None)):
+            return result.content
+
+        # Check if it's a specific LangChain message type
+        if "langchain_core.messages" in str(type(result)):
+            if hasattr(result, "content"):
+                return result.content
+
+        # Process the result from the ReAct agent
+        if isinstance(result, dict):
+            if "messages" in result:
+                # The ReAct agent returns a dictionary with a "messages" key
+                last_message = result["messages"][-1]
+
+                # Extract the markdown content from the message
+                if hasattr(last_message, "content"):
+                    return last_message.content
+                elif isinstance(last_message, dict) and "content" in last_message:
+                    content = last_message["content"]
+                    # Extract content between metadata markers if present
+                    if isinstance(content, str) and content.startswith("content='"):
+                        match = re.match(r"content='(.+)'", content, re.DOTALL)
+                        if match:
+                            return match.group(1)
+                    return content
+            elif "content" in result:
+                return result["content"]
+            elif "choices" in result:  # OpenAI API format
+                if len(result["choices"]) > 0:
+                    content = result["choices"][0].get("message", {}).get("content", "")
+                    if isinstance(content, str) and content.startswith("content='"):
+                        match = re.match(r"content='(.+?)'", content, re.DOTALL)
+                        if match:
+                            return match.group(1)
+                    return content
+
+        # Fallback to string conversion and cleaning
+        result_str = str(result)
+        if result_str.startswith("content='"):
+            match = re.match(r"content='(.+?)' additional_kwargs=", result_str, re.DOTALL)
+            if match:
+                return match.group(1)
+
+        return result_str
+
     def extract_pharmaceutical_data(self, slide_image, prompt, system_prompt, tools):
         """
         Extract pharmaceutical data from a slide image.
@@ -34,22 +108,75 @@ class ModelProvider:
         Returns:
             Markdown-formatted extraction result
         """
-        raise NotImplementedError(
-            "Subclasses must implement extract_pharmaceutical_data"
-        )
+        # Create ReAct agent with tools
+        pharma_extractor = self.create_react_agent(tools, system_prompt)
 
-    def aggregate_extractions(self, extractions, prompt):
+        # Format the extraction input with image (implemented by subclasses)
+        extraction_input = self.format_extraction_input(slide_image, prompt, system_prompt)
+
+        print(Fore.BLUE + f"Using {self.model_name} for extraction..." + Style.RESET_ALL)
+
+        # Call the model via ReAct agent
+        result = pharma_extractor.invoke(extraction_input)
+
+        # Extract and return the markdown content
+        return self.extract_markdown_content(result)
+
+    def format_extraction_input(self, slide_image, prompt, system_prompt):
         """
-        Aggregate multiple extraction results.
+        Format the extraction input for the specific model provider.
+        To be implemented by subclasses.
+        """
+        raise NotImplementedError("Subclasses must implement format_extraction_input")
+
+    def format_aggregation_input(self, slide_image, prompt, system_prompt):
+        """
+        Format the aggregation input for the specific model provider.
+        To be implemented by subclasses.
+        """
+        raise NotImplementedError("Subclasses must implement format_aggregation_input")
+
+    def aggregate_extractions(self, extractions, prompt, slide_image=None, tools=None, system_prompt=None):
+        """
+        Aggregate multiple extraction results using a ReAct agent.
 
         Args:
             extractions: List of extraction results
             prompt: The aggregation prompt
+            slide_image: Base64-encoded slide image
+            tools: List of tools to use for aggregation
+            system_prompt: System prompt for aggregation
 
         Returns:
             Aggregated extraction in markdown format
         """
-        raise NotImplementedError("Subclasses must implement aggregate_extractions")
+        # Use AGGREGATION_SYSTEM_PROMPT as default if not provided
+        if system_prompt is None:
+            system_prompt = AGGREGATION_SYSTEM_PROMPT
+            
+        try:
+            # If no tools provided, use empty list (will be updated in nodes.py)
+            if tools is None:
+                tools = []
+                
+            # Create ReAct agent with tools
+            aggregator = self.create_react_agent(tools, system_prompt)
+
+            # Format the aggregation input with image
+            aggregation_input = self.format_aggregation_input(slide_image, prompt, system_prompt)
+
+            print(Fore.BLUE + f"Using {self.model_name} for aggregation..." + Style.RESET_ALL)
+
+            # Call the model via ReAct agent
+            result = aggregator.invoke(aggregation_input)
+
+            # Extract and return the markdown content
+            return self.extract_markdown_content(result)
+
+        except Exception as e:
+            print(Fore.RED + f"Error in aggregation: {str(e)}" + Style.RESET_ALL)
+            # If agent invocation fails, return the first extraction as a fallback
+            return extractions[0] if extractions else "No extractions to aggregate"
 
 
 class GoogleModelProvider(ModelProvider):
@@ -68,28 +195,12 @@ class GoogleModelProvider(ModelProvider):
         print(Fore.GREEN + f"Initializing Google model: {model_name}" + Style.RESET_ALL)
         self.model = ChatGoogleGenerativeAI(temperature=0, model=model_name)
 
-    def extract_pharmaceutical_data(self, slide_image, prompt, system_prompt, tools):
+    def format_extraction_input(self, slide_image, prompt, system_prompt):
         """
-        Extract pharmaceutical data using a Gemini model.
-
-        Args:
-            slide_image: Base64-encoded slide image
-            prompt: The user prompt for extraction
-            system_prompt: The system prompt for extraction
-            tools: List of tools to use for extraction
-
-        Returns:
-            Markdown-formatted extraction result
+        Format the extraction input for Google models.
         """
-        # Create ReAct agent with tools
-        pharma_extractor = create_react_agent(
-            model=self.model,
-            tools=tools,
-            prompt=system_prompt,
-        )
-
         # Format input for Gemini models (uses image_url format with base64 data)
-        extraction_input = {
+        return {
             "messages": [
                 (
                     "user",
@@ -106,97 +217,31 @@ class GoogleModelProvider(ModelProvider):
             ]
         }
 
-        print(
-            Fore.BLUE + f"Using {self.model_name} for extraction..." + Style.RESET_ALL
-        )
-
-        # Call the model via ReAct agent
-        result = pharma_extractor.invoke(extraction_input)
-
-        # Extract and return the markdown content
-        return self._extract_markdown_content(result)
-
-    def _extract_markdown_content(self, result):
+    def format_aggregation_input(self, slide_image, prompt, system_prompt):
         """
-        Extract markdown content from Gemini response.
+        Format the aggregation input for Google models.
         """
-        # Check for LangChain message objects first
-        if hasattr(result, "content") and not callable(
-            getattr(result, "content", None)
-        ):
-            return result.content
-
-        # Then check if it's a specific LangChain message type
-        if "langchain_core.messages" in str(type(result)):
-            if hasattr(result, "content"):
-                return result.content
-
-        # Process the result from the ReAct agent
-        if isinstance(result, dict):
-            if "messages" in result:
-                # The ReAct agent returns a dictionary with a "messages" key
-                last_message = result["messages"][-1]
-
-                # Extract the markdown content from the message
-                if hasattr(last_message, "content"):
-                    return last_message.content
-                elif isinstance(last_message, dict) and "content" in last_message:
-                    content = last_message["content"]
-                    # If content contains metadata markers, extract just the text
-                    if isinstance(content, str) and content.startswith("content='"):
-                        # Extract the actual content between content=' and the next '
-                        import re
-
-                        match = re.match(r"content='(.+)'", content, re.DOTALL)
-                        if match:
-                            return match.group(1)
-                    return content
-            elif "content" in result:
-                return result["content"]
-
-        # Convert to string and clean if all else fails
-        result_str = str(result)
-        # Try to clean up the string if it contains metadata
-        if result_str.startswith("content='"):
-            import re
-
-            match = re.match(
-                r"content='(.+?)' additional_kwargs=", result_str, re.DOTALL
-            )
-            if match:
-                return match.group(1)
-
-        return result_str
-
-    def aggregate_extractions(self, extractions, prompt):
-        """
-        Aggregate multiple extraction results using a Gemini model.
-
-        Args:
-            extractions: List of extraction results
-            prompt: The aggregation prompt
-
-        Returns:
-            Aggregated extraction in markdown format
-        """
-        print(
-            Fore.BLUE + f"Using {self.model_name} for aggregation..." + Style.RESET_ALL
-        )
-
-        try:
-            result = self.model.invoke(
-                [
-                    {"role": "system", "content": AGGREGATION_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ]
-            )
-        except Exception as e:
-            print(Fore.RED + f"Error in aggregation: {str(e)}" + Style.RESET_ALL)
-            # If direct invocation fails, return the first extraction as a fallback
-            return extractions[0] if extractions else "No extractions to aggregate"
-
-        # Extract and return the markdown content
-        return self._extract_markdown_content(result)
+        # Format input for Gemini models with system message and image
+        return {
+            "messages": [
+                (
+                    "system",
+                    system_prompt
+                ),
+                (
+                    "user",
+                    [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{slide_image}"
+                            },
+                        },
+                    ],
+                )
+            ]
+        }
 
 
 class AnthropicModelProvider(ModelProvider):
@@ -217,29 +262,12 @@ class AnthropicModelProvider(ModelProvider):
         )
         self.model = ChatAnthropic(temperature=0, model=model_name)
 
-    def extract_pharmaceutical_data(self, slide_image, prompt, system_prompt, tools):
+    def format_extraction_input(self, slide_image, prompt, system_prompt):
         """
-        Extract pharmaceutical data using a Claude model.
-
-        Args:
-            slide_image: Base64-encoded slide image
-            prompt: The user prompt for extraction
-            system_prompt: The system prompt for extraction
-            tools: List of tools to use for extraction
-
-        Returns:
-            Markdown-formatted extraction result
+        Format the extraction input for Anthropic models.
         """
-        # Create ReAct agent with tools
-        pharma_extractor = create_react_agent(
-            model=self.model,
-            tools=tools,
-            prompt=system_prompt,
-        )
-
-        # Format input for Claude models (Claude uses different image format)
         # Format for Claude's multimodal API which accepts base64 directly
-        extraction_input = {
+        return {
             "messages": [
                 {
                     "role": "user",
@@ -258,101 +286,33 @@ class AnthropicModelProvider(ModelProvider):
             ]
         }
 
-        print(
-            Fore.BLUE + f"Using {self.model_name} for extraction..." + Style.RESET_ALL
-        )
-
-        # Call the model via ReAct agent
-        result = pharma_extractor.invoke(extraction_input)
-
-        # Extract and return the markdown content
-        return self._extract_markdown_content(result)
-
-    def _extract_markdown_content(self, result):
+    def format_aggregation_input(self, slide_image, prompt, system_prompt):
         """
-        Extract markdown content from Claude response.
-
-        Args:
-            result: Response from Claude model
-
-        Returns:
-            Extracted markdown content as string
+        Format the aggregation input for Anthropic models.
         """
-        # Check for LangChain message objects first
-        if hasattr(result, "content") and not callable(
-            getattr(result, "content", None)
-        ):
-            return result.content
-
-        # Then check if it's a specific LangChain message type
-        if "langchain_core.messages" in str(type(result)):
-            if hasattr(result, "content"):
-                return result.content
-
-        # Claude typically returns content in a more structured format
-        if isinstance(result, dict):
-            if "messages" in result:
-                # Use the last assistant message
-                last_message = result["messages"][-1]
-                if hasattr(last_message, "content"):
-                    return last_message.content
-                elif isinstance(last_message, dict) and "content" in last_message:
-                    content = last_message["content"]
-                    # Handle content metadata format if present
-                    if isinstance(content, str) and content.startswith("content='"):
-                        import re
-
-                        match = re.match(r"content='(.+?)'", content, re.DOTALL)
-                        if match:
-                            return match.group(1)
-                    return content
-            elif "content" in result:
-                return result["content"]
-
-        # Fallback and clean if all else fails
-        result_str = str(result)
-        if result_str.startswith("content='"):
-            import re
-
-            match = re.match(
-                r"content='(.+?)' additional_kwargs=", result_str, re.DOTALL
-            )
-            if match:
-                return match.group(1)
-
-        return result_str
-
-    def aggregate_extractions(self, extractions, prompt):
-        """
-        Aggregate multiple extraction results using a Claude model.
-
-        Args:
-            extractions: List of extraction results
-            prompt: The aggregation prompt
-
-        Returns:
-            Aggregated extraction in markdown format
-        """
-        print(
-            Fore.BLUE + f"Using {self.model_name} for aggregation..." + Style.RESET_ALL
-        )
-
-        try:
-            # Call the model directly
-            result = self.model.invoke(
-                [
-                    {"role": "system", "content": AGGREGATION_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ]
-            )
-
-        except Exception as e:
-            print(Fore.RED + f"Error in aggregation: {str(e)}" + Style.RESET_ALL)
-            # If direct invocation fails, return the first extraction as a fallback
-            return extractions[0] if extractions else "No extractions to aggregate"
-
-        # Extract and return the markdown content
-        return self._extract_markdown_content(result)
+        # Format for Claude's multimodal API with system message and image
+        return {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": slide_image,
+                            },
+                        },
+                    ],
+                }
+            ]
+        }
 
 
 class OpenAIModelProvider(ModelProvider):
@@ -371,28 +331,12 @@ class OpenAIModelProvider(ModelProvider):
         print(Fore.GREEN + f"Initializing OpenAI model: {model_name}" + Style.RESET_ALL)
         self.model = ChatOpenAI(temperature=0, model=model_name)
 
-    def extract_pharmaceutical_data(self, slide_image, prompt, system_prompt, tools):
+    def format_extraction_input(self, slide_image, prompt, system_prompt):
         """
-        Extract pharmaceutical data using an OpenAI model.
-
-        Args:
-            slide_image: Base64-encoded slide image
-            prompt: The user prompt for extraction
-            system_prompt: The system prompt for extraction
-            tools: List of tools to use for extraction
-
-        Returns:
-            Markdown-formatted extraction result
+        Format the extraction input for OpenAI models.
         """
-        # Create ReAct agent with tools
-        pharma_extractor = create_react_agent(
-            model=self.model,
-            tools=tools,
-            prompt=system_prompt,
-        )
-
         # Format input for OpenAI models (uses content with image_url)
-        extraction_input = {
+        return {
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {
@@ -410,112 +354,28 @@ class OpenAIModelProvider(ModelProvider):
             ]
         }
 
-        print(
-            Fore.BLUE + f"Using {self.model_name} for extraction..." + Style.RESET_ALL
-        )
-
-        # Call the model via ReAct agent
-        result = pharma_extractor.invoke(extraction_input)
-
-        # Extract and return the markdown content
-        return self._extract_markdown_content(result)
-
-    def _extract_markdown_content(self, result):
+    def format_aggregation_input(self, slide_image, prompt, system_prompt):
         """
-        Extract markdown content from OpenAI response.
-
-        Args:
-            result: Response from OpenAI model
-
-        Returns:
-            Extracted markdown content as string
+        Format the aggregation input for OpenAI models.
         """
-        # Check for LangChain message objects first
-        if hasattr(result, "content") and not callable(
-            getattr(result, "content", None)
-        ):
-            return result.content
-
-        # Then check if it's a specific LangChain message type
-        if "langchain_core.messages" in str(type(result)):
-            if hasattr(result, "content"):
-                return result.content
-
-        # OpenAI typically returns a structured response
-        if isinstance(result, dict):
-            if "messages" in result:
-                # Extract from messages
-                last_message = result["messages"][-1]
-                if hasattr(last_message, "content"):
-                    return last_message.content
-                elif isinstance(last_message, dict) and "content" in last_message:
-                    content = last_message["content"]
-                    # Handle content metadata format if present
-                    if isinstance(content, str) and content.startswith("content='"):
-                        import re
-
-                        match = re.match(r"content='(.+?)'", content, re.DOTALL)
-                        if match:
-                            return match.group(1)
-                    return content
-            elif "choices" in result:
-                # Direct API response format
-                if len(result["choices"]) > 0:
-                    content = result["choices"][0].get("message", {}).get("content", "")
-                    if isinstance(content, str) and content.startswith("content='"):
-                        import re
-
-                        match = re.match(r"content='(.+?)'", content, re.DOTALL)
-                        if match:
-                            return match.group(1)
-                    return content
-            elif "content" in result:
-                return result["content"]
-
-        # Fallback and clean if all else fails
-        result_str = str(result)
-        if result_str.startswith("content='"):
-            import re
-
-            match = re.match(
-                r"content='(.+?)' additional_kwargs=", result_str, re.DOTALL
-            )
-            if match:
-                return match.group(1)
-
-        return result_str
-
-    def aggregate_extractions(self, extractions, prompt):
-        """
-        Aggregate multiple extraction results using an OpenAI model.
-
-        Args:
-            extractions: List of extraction results
-            prompt: The aggregation prompt
-
-        Returns:
-            Aggregated extraction in markdown format
-        """
-        print(
-            Fore.BLUE + f"Using {self.model_name} for aggregation..." + Style.RESET_ALL
-        )
-
-        try:
-            # Call the model directly
-            result = self.model.invoke(
-                [
-                    {"role": "system", "content": AGGREGATION_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ]
-            )
-
-        except Exception as e:
-            print(Fore.RED + f"Error in aggregation: {str(e)}" + Style.RESET_ALL)
-            # If direct invocation fails, return the first extraction as a fallback
-            return extractions[0] if extractions else "No extractions to aggregate"
-
-        # Extract and return the markdown content
-        return self._extract_markdown_content(result)
+        # Format input for OpenAI models with system message and image
+        return {
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{slide_image}"
+                            },
+                        },
+                    ],
+                },
+            ]
+        }
 
 
 def create_model_provider(provider_type, model_name):

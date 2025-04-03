@@ -1,6 +1,6 @@
 from trustcall import create_extractor
 from .tools import search, lookup_previous, check_schema
-from .prompts import PHARMA_EXTRACTION_SYSTEM_PROMPT
+from .prompts import PHARMA_EXTRACTION_SYSTEM_PROMPT, AGGREGATION_SYSTEM_PROMPT
 from .state import DocumentMetadata
 from .providers import create_model_provider
 from colorama import Fore, Style
@@ -78,6 +78,15 @@ class Agents:
         )
 
     def _determine_provider_type(self, model_name):
+        """
+        Determine the provider type based on the model name.
+        
+        Args:
+            model_name: Name of the model
+            
+        Returns:
+            Provider type string ("google", "anthropic", or "openai")
+        """
         model_name = model_name.lower()
 
         if "gemini" in model_name:
@@ -115,16 +124,52 @@ class Agents:
             slide_image, prompt, PHARMA_EXTRACTION_SYSTEM_PROMPT, self.tools
         )
 
-    def aggregate_results(self, extractions, prompt):
+    def aggregate_results(self, extractions, prompt, slide_image=None):
         """
-        Aggregate multiple extraction results.
+        Aggregate multiple extraction results using ReAct methodology.
 
         Args:
             extractions: List of extraction results
             prompt: Formatted aggregation prompt
+            slide_image: Base64-encoded slide image (optional, but enhances aggregation quality)
 
         Returns:
             Aggregated extraction in markdown format
         """
+        if self.aggregator_model not in self.providers:
+            # If aggregator model not available, fallback to the first available model
+            self.aggregator_model = next(iter(self.providers.keys()))
+            print(
+                Fore.YELLOW
+                + f"Aggregator model not available. Using {self.aggregator_model} instead."
+                + Style.RESET_ALL
+            )
+            
         provider = self.providers[self.aggregator_model]
-        return provider.aggregate_extractions(extractions, prompt)
+        
+        # Check if slide image is provided
+        if slide_image:
+            print(
+                Fore.BLUE
+                + f"Aggregating with {self.aggregator_model} using ReAct agent and slide image..."
+                + Style.RESET_ALL
+            )
+            return provider.aggregate_extractions(
+                extractions, 
+                prompt, 
+                slide_image=slide_image,
+                tools=self.tools,
+                system_prompt=AGGREGATION_SYSTEM_PROMPT
+            )
+        else:
+            print(
+                Fore.YELLOW
+                + f"Aggregating with {self.aggregator_model} without slide image (reduced accuracy)..."
+                + Style.RESET_ALL
+            )
+            return provider.aggregate_extractions(
+                extractions, 
+                prompt,
+                tools=self.tools,
+                system_prompt=AGGREGATION_SYSTEM_PROMPT
+            )
