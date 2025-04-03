@@ -10,6 +10,16 @@ def main():
         description="Extract pharmaceutical data from presentations"
     )
     parser.add_argument("pdf_path", help="Path to the PDF file to process")
+    parser.add_argument(
+        "--models", 
+        help="Comma-separated list of models to use (e.g., 'gemini-1.5-pro,gemini-2.0-flash,gemini-2.5-pro-exp-03-25')",
+        default="gemini-2.5-pro-exp-03-25"
+    )
+    parser.add_argument(
+        "--aggregator-model",
+        help="Model to use for aggregation (defaults to first model in --models)",
+        default="gemini-2.5-pro-exp-03-25"
+    )
 
     args = parser.parse_args()
 
@@ -24,18 +34,22 @@ def main():
     pdf_absolute_path = os.path.abspath(args.pdf_path)
     print(Fore.GREEN + f"Using PDF file: {pdf_absolute_path}" + Style.RESET_ALL)
 
-    # Initialize workflow
-    workflow = PharmDataWorkflow()
+    # Parse models from command line
+    active_models = [model.strip() for model in args.models.split(",")]
+    print(Fore.GREEN + f"Using models: {', '.join(active_models)}" + Style.RESET_ALL)
+    
+    # Initialize workflow with model configuration
+    workflow = PharmDataWorkflow(active_models=active_models, aggregator_model=args.aggregator_model)
     app = workflow.app
 
-    # Initial state for the workflow
+    # Initial state for the workflow - include active models
     initial_state = {
         "document_metadata": None,
         "slides": [],
         "current_slide": None,
         "extracted_data": [],
         "processing_complete": False,
-        "pdf_path": pdf_absolute_path,  # Add PDF path to initial state
+        "pdf_path": pdf_absolute_path,
     }
 
     # Run the extraction workflow

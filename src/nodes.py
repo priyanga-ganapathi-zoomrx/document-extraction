@@ -1,18 +1,19 @@
 from colorama import Fore, Style
 from .agents import Agents
 from .utils import PDFToolsClass
-from .state import GraphState, DocumentMetadata
+from .state import GraphState, DocumentMetadata, ModelExtraction
 from .tools import update_vector_store
 from .prompts import (
     PHARMA_EXTRACTION_USER_PROMPT_TEMPLATE,
     SLIDE_METADATA_EXTRACTION_PROMPT,
+    PHARMA_EXTRACTION_SYSTEM_PROMPT,
 )
 import os
 
 
 class Nodes:
-    def __init__(self):
-        self.agents = Agents()
+    def __init__(self, active_models=None, aggregator_model=None):
+        self.agents = Agents(active_models, aggregator_model)
         self.pdf_tools = PDFToolsClass()
 
     def load_document(self, state: GraphState) -> GraphState:
@@ -186,7 +187,7 @@ class Nodes:
             return updated_state
 
     def extract_pharma_data(self, state: GraphState) -> GraphState:
-        """Extract pharmaceutical data directly from slide image."""
+        """Extract pharmaceutical data from slide image using all active models."""
         # Check if we have a current slide to process
         if not state.get("current_slide"):
             print(Fore.RED + "No current slide to process!" + Style.RESET_ALL)
@@ -202,7 +203,7 @@ class Nodes:
             + Style.RESET_ALL
         )
 
-        # Get previous extractions to use as context
+        # Get previous extractions to use as context (same as original)
         previous_extractions = ""
         if state["extracted_data"]:
             # Combine previous extractions but limit to avoid context window issues
@@ -216,6 +217,7 @@ class Nodes:
                     f"### Slide {slide_num} Extraction:\n{extraction}\n\n"
                 )
 
+        # Format the prompt (same as original)
         formatted_text = PHARMA_EXTRACTION_USER_PROMPT_TEMPLATE.format(
             presentation_title=state["document_metadata"].title,
             company_name=state["document_metadata"].company,
@@ -227,67 +229,204 @@ class Nodes:
             previous_extractions=previous_extractions,
         )
 
-        # Format for Gemini - it uses image_url format with base64 data
-        print(Fore.BLUE + "Using Gemini model format for images" + Style.RESET_ALL)
-        extraction_input = {
-            "messages": [
-                (
-                    "user",
-                    [
-                        {"type": "text", "text": formatted_text},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/png;base64,{state['current_slide'].base64_image}"
-                            },
-                        },
-                    ],
+        current_slide = state["current_slide"]
+
+        # Extract data using each active model
+        for model_name in self.agents.active_models:
+            try:
+                print(
+                    Fore.BLUE
+                    + f"Using {model_name} for extraction..."
+                    + Style.RESET_ALL
                 )
-            ]
-        }
 
-        result = self.agents.pharma_data_extractor.invoke(extraction_input)
+                # Use the provider's extraction method
+                provider = self.agents.providers[model_name]
+                provider_type = self.agents._determine_provider_type(model_name)
 
-        # Process the result from the ReAct agent
-        if isinstance(result, dict) and "messages" in result:
-            # The ReAct agent returns a dictionary with a "messages" key containing all messages
-            # The last message is the final extraction result from the AI
-            last_message = result["messages"][-1]
-
-            # Extract the markdown content from the message
-            if hasattr(last_message, "content"):
-                markdown_result = last_message.content
-            else:
-                # Handle tuple format if that's what's returned
-                markdown_result = (
-                    last_message[1]
-                    if isinstance(last_message, tuple)
-                    else str(last_message)
+                # Extract data using the provider
+                markdown_result = provider.extract_pharmaceutical_data(
+                    state["current_slide"].base64_image,
+                    formatted_text,
+                    PHARMA_EXTRACTION_SYSTEM_PROMPT,
+                    self.agents.tools,
                 )
-        else:
-            # Fallback in case the result structure is different
-            markdown_result = str(result)
 
-        # Ensure markdown_result is a string
-        if not isinstance(markdown_result, str):
+                # Ensure the result is a string
+                if not isinstance(markdown_result, str):
+                    print(
+                        Fore.YELLOW
+                        + f"Warning: Expected string result from {model_name}, got {type(markdown_result)}. Converting to string."
+                        + Style.RESET_ALL
+                    )
+                    markdown_result = str(markdown_result)
+
+                # Create a ModelExtraction object and add to current slide
+                model_extraction = ModelExtraction(
+                    model_name=model_name,
+                    provider=provider_type,
+                    extraction=markdown_result,
+                )
+
+                # Add to current slide's extractions
+                current_slide.model_extractions.append(model_extraction)
+
+                print(
+                    Fore.GREEN
+                    + f"Extraction with {model_name} complete."
+                    + Style.RESET_ALL
+                )
+
+            except Exception as e:
+                print(
+                    Fore.RED
+                    + f"Error in {model_name} extraction: {str(e)}"
+                    + Style.RESET_ALL
+                )
+
+        # Update the state with the modified current_slide
+        updated_state = state.copy()
+
+        # Find the slide in slides list and update it
+        for i, slide in enumerate(updated_state["slides"]):
+            if slide.slide_number == current_slide.slide_number:
+                updated_state["slides"][i] = current_slide
+                break
+
+        return updated_state
+
+    def aggregate_extractions(self, state: GraphState) -> GraphState:
+        """Aggregate multiple extraction results into a single optimized extraction."""
+        # Check if we have a current slide with extractions
+        if (
+            not state.get("current_slide")
+            or not state["current_slide"].model_extractions
+        ):
+            print(Fore.RED + "No extractions to aggregate!" + Style.RESET_ALL)
+            return state
+
+        current_slide = state["current_slide"]
+        model_extractions = current_slide.model_extractions
+
+        # If only one model was used, no need to aggregate
+        if len(model_extractions) == 1:
             print(
                 Fore.YELLOW
-                + f"Warning: Expected string but got {type(markdown_result)}. Converting to string."
+                + "Only one model used, skipping aggregation."
                 + Style.RESET_ALL
             )
-            markdown_result = str(markdown_result)
+            # Use the single extraction as the final result
+            current_slide.aggregated_extraction = model_extractions[0].extraction
 
-        # Add to extraction results
-        updated_extractions = state["extracted_data"] + [markdown_result]
+            # Add to main extraction results list
+            updated_extractions = state["extracted_data"] + [
+                model_extractions[0].extraction
+            ]
 
-        # Update vector store with the new extraction
-        update_vector_store(
-            extraction_text=markdown_result,
-            slide_number=state["current_slide"].slide_number,
+            # Update the state
+            updated_state = state.copy()
+            updated_state["extracted_data"] = updated_extractions
+
+            # Update vector store
+            update_vector_store(
+                extraction_text=model_extractions[0].extraction,
+                slide_number=current_slide.slide_number,
+            )
+
+            # Find and update the slide in slides list
+            for i, slide in enumerate(updated_state["slides"]):
+                if slide.slide_number == current_slide.slide_number:
+                    updated_state["slides"][i] = current_slide
+                    break
+
+            return updated_state
+
+        # Multiple models were used, need to aggregate
+        print(
+            Fore.BLUE
+            + f"Aggregating extractions from {len(model_extractions)} models..."
+            + Style.RESET_ALL
         )
 
-        # Add to extraction results
-        return {**state, "extracted_data": updated_extractions}
+        # Prepare the model outputs for the prompt template
+        model_outputs_formatted = ""
+        for i, extraction in enumerate(model_extractions):
+            model_outputs_formatted += f"#### {extraction.model_name} Output:\n```\n{extraction.extraction}\n```\n\n"
+
+        # Format the aggregation prompt using AGGREGATION_USER_PROMPT_TEMPLATE
+        from .prompts import AGGREGATION_USER_PROMPT_TEMPLATE
+
+        aggregation_prompt = AGGREGATION_USER_PROMPT_TEMPLATE.format(
+            PRESENTATION_TITLE=state["document_metadata"].title,
+            COMPANY_NAME=state["document_metadata"].company,
+            PRESENTATION_DATE=state["document_metadata"].date,
+            EVENT_NAME=state["document_metadata"].event,
+            SLIDE_NUMBER=current_slide.slide_number,
+            SLIDE_TITLE="",  # We don't have this information
+            DOCUMENT_SOURCE_ID=state["document_metadata"].document_id,
+            MODEL_OUTPUTS=model_outputs_formatted,
+        )
+
+        # Call the aggregator model
+        aggregator_model = self.agents.aggregator_model
+        aggregator = self.agents.providers[aggregator_model]
+
+        try:
+            # Get the aggregated extraction
+            aggregated_result = aggregator.aggregate_extractions(
+                [ext.extraction for ext in model_extractions], aggregation_prompt
+            )
+
+            # Store the aggregated result in the current slide
+            current_slide.aggregated_extraction = aggregated_result
+
+            # Add to main extraction results list
+            updated_extractions = state["extracted_data"] + [aggregated_result]
+
+            # Update the state
+            updated_state = state.copy()
+            updated_state["extracted_data"] = updated_extractions
+
+            # Update vector store
+            update_vector_store(
+                extraction_text=aggregated_result,
+                slide_number=current_slide.slide_number,
+            )
+
+            # Find and update the slide in slides list
+            for i, slide in enumerate(updated_state["slides"]):
+                if slide.slide_number == current_slide.slide_number:
+                    updated_state["slides"][i] = current_slide
+                    break
+
+            print(Fore.GREEN + "Aggregation complete." + Style.RESET_ALL)
+            return updated_state
+
+        except Exception as e:
+            print(Fore.RED + f"Error during aggregation: {str(e)}" + Style.RESET_ALL)
+            # Fallback to using the first model's extraction
+            fallback_extraction = model_extractions[0].extraction
+            current_slide.aggregated_extraction = fallback_extraction
+
+            # Add to main extraction results list
+            updated_extractions = state["extracted_data"] + [fallback_extraction]
+
+            # Update the state and vector store
+            updated_state = state.copy()
+            updated_state["extracted_data"] = updated_extractions
+
+            update_vector_store(
+                extraction_text=fallback_extraction,
+                slide_number=current_slide.slide_number,
+            )
+
+            # Find and update the slide in slides list
+            for i, slide in enumerate(updated_state["slides"]):
+                if slide.slide_number == current_slide.slide_number:
+                    updated_state["slides"][i] = current_slide
+                    break
+
+            return updated_state
 
     def check_processing_complete(self, state: GraphState) -> GraphState:
         """
@@ -400,7 +539,14 @@ class Nodes:
             for i, extraction in enumerate(state["extracted_data"]):
                 slide_num = i + 1
                 f.write(f"## Slide {slide_num}\n\n")
-                f.write(extraction)
+                # Clean extraction of any metadata or formatting issues
+                clean_extraction = extraction
+                if clean_extraction.startswith("content='"):
+                    import re
+                    match = re.match(r"content='(.+?)' additional_kwargs=", clean_extraction, re.DOTALL)
+                    if match:
+                        clean_extraction = match.group(1)
+                f.write(clean_extraction)
                 f.write("\n\n---\n\n")
 
         print(
