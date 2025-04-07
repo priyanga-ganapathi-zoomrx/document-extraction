@@ -7,12 +7,14 @@ from typing import List, Dict, Any
 from langgraph.graph import StateGraph, END
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
+from langchain_tavily import TavilySearch
+from langgraph.prebuilt import create_react_agent
 from trustcall import create_extractor
 
 # Assuming GraphState and Page are defined in src.state
 from .state import GraphState, Page, ExtractedData, Snippet
 from .utils import image_to_base64
-from .prompt import IMAGE_TO_SNIPPET_PROMPT
+from .prompt import IMAGE_TO_SNIPPET_PROMPT, SNIPPET_TO_ENRICHED_SNIPPET_PROMPT
 
 OUTPUT_DIR = "output"
 OUTPUT_FILENAME = "snippets.txt"
@@ -133,27 +135,72 @@ def generate_page_snippet(state: GraphState) -> Dict[str, Any]:
     # Return the modified list of pages
     return {"pages": updated_pages}
 
+def enrich_page_snippets(state: GraphState) -> Dict[str, Any]:
+    current_page = state.get("current_page")
+    pages = state.get("pages", [])
+    if not current_page or not current_page.snippets:
+        print("No current page or snippets to enrich. Skipping.")
+        return {"pages": pages}
+
+    # Initialize LLM and Tavily tool
+    api_key = os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        print("Error: GOOGLE_API_KEY not set. Skipping enrichment.")
+        return {"pages": pages}
+
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-2.5-pro-exp-03-25",
+        google_api_key=api_key
+    )
+    tavily_tool = TavilySearch(max_results=5)
+    agent = create_react_agent(llm, [tavily_tool])
+
+    # Process each snippet
+    for snippet in current_page.snippets:
+        if not snippet.enriched_content:  # Only enrich if not already done
+            try:
+                response = agent.invoke({
+                    "messages": [
+                        {"role": "system", "content": SNIPPET_TO_ENRICHED_SNIPPET_PROMPT},
+                        {"role": "user", "content": snippet.content}
+                    ]
+                })
+                # Extract enriched content from the last message
+                enriched_content = response["messages"][-1].content
+                snippet.enriched_content = enriched_content
+                print(f"Enriched snippet title: {snippet.title}")
+                print(f"Enriched snippet content: {snippet.enriched_content}")
+            except Exception as e:
+                print(f"Error enriching snippet '{snippet.title}': {e}")
+                snippet.enriched_content = f"Error: {e}"
+
+    # Update pages list
+    updated_pages = pages[:]
+    try:
+        page_index = next(i for i, p in enumerate(updated_pages) if p.page_number == current_page.page_number)
+        updated_pages[page_index] = current_page
+        print(f"Updated page {current_page.page_number} with enriched snippets.")
+    except StopIteration:
+        print(f"Error: Could not find page {current_page.page_number} to update.")
+    return {"pages": updated_pages}
 
 def aggregate_snippets(state: GraphState) -> Dict[str, str]:
-    """Aggregates all generated snippets into a single string."""
-    print("--- Aggregating Snippets ---")
     pages = state.get("pages", [])
     aggregated_page_texts = []
     for page in pages:
         page_header = f"## Page {page.page_number}\n"
         snippets_text = []
-        if page.snippets: # Check if the list is not empty
+        if page.snippets:
             for snippet in page.snippets:
-                # Format each snippet with its title and content
-                snippets_text.append(f"### {snippet.title}\n{snippet.content}")
-            # Join snippets for the current page
+                content_text = f"### {snippet.title}\n**Original Content:**\n{snippet.content}"
+                if snippet.enriched_content:
+                    content_text += f"\n**Enriched Content:**\n{snippet.enriched_content}"
+                snippets_text.append(content_text)
             page_content = "\n\n".join(snippets_text)
         else:
-            page_content = "[Snippets not available]" # Handle cases with no snippets
+            page_content = "[Snippets not available]"
         aggregated_page_texts.append(f"{page_header}\n{page_content}")
-
     full_text = "\n\n---\n\n".join(aggregated_page_texts)
-    print(f"Aggregated text length: {len(full_text)} characters")
     return {"aggregated_snippets": full_text}
 
 def export_snippets(state: GraphState) -> Dict:
@@ -200,13 +247,15 @@ def build_snippet_workflow():
     workflow.add_node("set_next_page", set_next_page)
     workflow.add_node("generate_page_snippet", generate_page_snippet)
     workflow.add_node("aggregate_snippets", aggregate_snippets)
+    workflow.add_node("enrich_page_snippets", enrich_page_snippets)
     workflow.add_node("export_snippets", export_snippets)
 
     # Set entry point
     workflow.set_entry_point("set_next_page")
 
     # Add edges
-    workflow.add_edge("generate_page_snippet", "set_next_page") # Loop back after generating
+    workflow.add_edge("generate_page_snippet", "enrich_page_snippets")
+    workflow.add_edge("enrich_page_snippets", "set_next_page")
     workflow.add_edge("aggregate_snippets", "export_snippets")
     workflow.add_edge("export_snippets", END)
 
