@@ -1,0 +1,1 @@
+IMAGE_TO_SNIPPET_PROMPT = """Convert this image into multiple comprehensive paragraphs that preserve all data and context. Each paragraph should be formatted as a separate snippet that can be individually loaded into a life science market intelligence database. Please ensure no information is lost in the conversion process."""
