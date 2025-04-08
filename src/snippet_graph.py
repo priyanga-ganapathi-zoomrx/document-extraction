@@ -1,6 +1,7 @@
 # src/snippet_graph.py
 
 import os
+import json
 # import base64 # Remove base64 import
 from typing import List, Dict, Any
 
@@ -185,23 +186,43 @@ def enrich_page_snippets(state: GraphState) -> Dict[str, Any]:
     return {"pages": updated_pages}
 
 def aggregate_snippets(state: GraphState) -> Dict[str, str]:
+    """Aggregates snippets from all pages into a JSON file."""
+    print("--- Aggregating Snippets into JSON ---")
     pages = state.get("pages", [])
-    aggregated_page_texts = []
-    for page in pages:
-        page_header = f"## Page {page.page_number}\n"
-        snippets_text = []
-        if page.snippets:
-            for snippet in page.snippets:
-                content_text = f"### {snippet.title}\n**Original Content:**\n{snippet.content}"
-                if snippet.enriched_content:
-                    content_text += f"\n**Enriched Content:**\n{snippet.enriched_content}"
-                snippets_text.append(content_text)
-            page_content = "\n\n".join(snippets_text)
-        else:
-            page_content = "[Snippets not available]"
-        aggregated_page_texts.append(f"{page_header}\n{page_content}")
-    full_text = "\n\n---\n\n".join(aggregated_page_texts)
-    return {"aggregated_snippets": full_text}
+    
+    # Prepare the JSON structure
+    aggregated_data = {
+        "pages": [
+            {
+                "page_number": page.page_number,
+                "image_path": page.image_path,
+                "snippets": [
+                    {
+                        "title": snippet.title,
+                        "content": snippet.content,
+                        "enriched_content": snippet.enriched_content
+                    }
+                    for snippet in page.snippets
+                ]
+            }
+            for page in pages
+        ]
+    }
+    
+    # Write to JSON file
+    output_dir = "output"
+    output_json_path = os.path.join(output_dir, "snippets.json")
+    
+    os.makedirs(output_dir, exist_ok=True)
+    try:
+        with open(output_json_path, "w", encoding="utf-8") as f:
+            json.dump(aggregated_data, f, indent=2)
+        print(f"Successfully exported snippets to {output_json_path}")
+    except Exception as e:
+        print(f"Error writing snippets to JSON file {output_json_path}: {e}")
+    
+    # Return aggregated data as string for state consistency
+    return {"aggregated_snippets": json.dumps(aggregated_data)}
 
 def export_snippets(state: GraphState) -> Dict:
     """Writes the aggregated snippets to a text file."""

@@ -5,6 +5,10 @@ from PIL import Image  # Import PIL Image
 from typing import List # Add typing List
 import base64 # Import base64
 from src.state import Page
+from langchain.docstore.document import Document
+from langchain_community.embeddings import OpenAIEmbeddings
+from langchain_community.vectorstores import DocArrayInMemorySearch
+import json
 
 # Configuration
 HIGH_DPI = 600                    # Initial high DPI for maximum fidelity
@@ -99,3 +103,32 @@ def image_to_base64(image_path: str) -> str:
     except Exception as e:
         print(f"Error processing image {image_path}: {e}")
         return "" 
+    
+# New function to load vector store
+def load_vector_store(json_path="table_descriptions.json"):
+    with open(json_path, "r") as f:
+        schema_data = json.load(f)
+
+    documents = []
+    for table in schema_data["tables"]:
+        table_name = table["table_name"]
+        table_desc = table["description"]
+        column_lines = [f"- {col['name']}: {col['description']} ({col['type']})" for col in table["columns"]]
+        doc_content = (
+            f"Table: {table_name}\n"
+            f"Description: {table_desc}\n"
+            f"Columns:\n" + "\n".join(column_lines)
+        )
+        doc = Document(page_content=doc_content, metadata={"table_name": table_name})
+        documents.append(doc)
+
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if not openai_api_key:
+        raise ValueError("OPENAI_API_KEY environment variable not set. Please add it to your .env file.")
+
+    embeddings = OpenAIEmbeddings(
+        model="text-embedding-3-small",
+        openai_api_key=openai_api_key
+    )
+    vector_store = DocArrayInMemorySearch.from_documents(documents, embedding=embeddings)
+    return vector_store
